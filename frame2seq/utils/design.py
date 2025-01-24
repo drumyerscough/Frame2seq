@@ -10,7 +10,7 @@ from frame2seq.utils.pred2output import output_fasta, output_indiv_fasta, output
 
 
 def design(self, pdb_file, chain_id, temperature, num_samples, omit_AA,
-           fixed_positions, save_indiv_seqs, save_indiv_neg_pll, verbose):
+           fixed_positions, save_indiv_seqs, save_indiv_neg_pll, save_logits, logits_only, verbose):
     seq_mask, aatype, X = get_inference_inputs(pdb_file, chain_id)
     seq_mask = seq_mask.to(self.device)
     aatype = aatype.to(self.device)
@@ -51,45 +51,50 @@ def design(self, pdb_file, chain_id, temperature, num_samples, omit_AA,
         sampled_seq = torch.multinomial(pred_seq,
                                         num_samples=num_samples,
                                         replacement=True)
-        for sample in tqdm(range(num_samples)):
-            sampled_seq_i = sampled_seq[:, sample]
-            input_seq_i = aatype[seq_mask]  # sequence from the input PDB file
-            neg_pll, avg_neg_pll = get_neg_pll(pred_seq_unscaled,
-                                               sampled_seq_i)
-            input_neg_pll, input_avg_neg_pll = get_neg_pll(
-                pred_seq_unscaled, input_seq_i
-            )  # negative pseudo-log-likelihood of the input sequence
-            recovery = torch.sum(
-                sampled_seq_i == aatype[seq_mask]) / torch.sum(seq_mask)
-            sampled_seq_i = [
-                residue_constants.ID_TO_AA[int(i)] for i in sampled_seq_i
-            ]
-            sampled_seq_i = "".join(sampled_seq_i)
-            if verbose:
-                print(f"Recovery : {recovery*100:.2f}%")
-                print(
-                    f"Average negative pseudo-log-likelihood : {avg_neg_pll:.2f}"
-                )
-                print(f"Sequence: {sampled_seq_i}")
-            preds.append([
-                pdb_file.split('/')[-1].split('.')[0], chain_id, sample,
-                sampled_seq_i, recovery, avg_neg_pll, temperature
-            ])
-            fasta_dir = os.path.join(self.save_dir, 'seqs')
-            os.makedirs(fasta_dir, exist_ok=True)
-            if save_indiv_seqs:  # save per-sequence fasta files
-                output_indiv_fasta(preds[-1], fasta_dir)
-            if save_indiv_neg_pll:  # save per-residue negative pseudo-log-likelihoods
-                scores['pdbid'] = pdb_file.split('/')[-1].split('.')[0]
-                scores['chain'] = chain_id
-                scores['sample'] = sample
-                scores['res_idx'] = [i for i in range(len(sampled_seq_i))]
-                scores['neg_pll'] = [
-                    neg_pll[i].item() for i in range(len(sampled_seq_i))
+        if save_logits:
+            csv_dir = os.path.join(self.save_dir, 'logits_scaled')
+            os.makedirs(csv_dir, exist_ok=True)
+            output_indiv_csv({resi: pred_seq[resi, ...] for resi in pred_seq.shape[0]}, csv_dir)
+        if not logits_only:
+            for sample in tqdm(range(num_samples)):
+                sampled_seq_i = sampled_seq[:, sample]
+                input_seq_i = aatype[seq_mask]  # sequence from the input PDB file
+                neg_pll, avg_neg_pll = get_neg_pll(pred_seq_unscaled,
+                                                sampled_seq_i)
+                input_neg_pll, input_avg_neg_pll = get_neg_pll(
+                    pred_seq_unscaled, input_seq_i
+                )  # negative pseudo-log-likelihood of the input sequence
+                recovery = torch.sum(
+                    sampled_seq_i == aatype[seq_mask]) / torch.sum(seq_mask)
+                sampled_seq_i = [
+                    residue_constants.ID_TO_AA[int(i)] for i in sampled_seq_i
                 ]
-                csv_dir = os.path.join(self.save_dir, 'scores')
-                os.makedirs(csv_dir, exist_ok=True)
-                output_indiv_csv(scores, csv_dir)
-        output_fasta(
-            preds, fasta_dir
-        )  # all generated sequences automatically saved to one fasta file
+                sampled_seq_i = "".join(sampled_seq_i)
+                if verbose:
+                    print(f"Recovery : {recovery*100:.2f}%")
+                    print(
+                        f"Average negative pseudo-log-likelihood : {avg_neg_pll:.2f}"
+                    )
+                    print(f"Sequence: {sampled_seq_i}")
+                preds.append([
+                    pdb_file.split('/')[-1].split('.')[0], chain_id, sample,
+                    sampled_seq_i, recovery, avg_neg_pll, temperature
+                ])
+                fasta_dir = os.path.join(self.save_dir, 'seqs')
+                os.makedirs(fasta_dir, exist_ok=True)
+                if save_indiv_seqs:  # save per-sequence fasta files
+                    output_indiv_fasta(preds[-1], fasta_dir)
+                if save_indiv_neg_pll:  # save per-residue negative pseudo-log-likelihoods
+                    scores['pdbid'] = pdb_file.split('/')[-1].split('.')[0]
+                    scores['chain'] = chain_id
+                    scores['sample'] = sample
+                    scores['res_idx'] = [i for i in range(len(sampled_seq_i))]
+                    scores['neg_pll'] = [
+                        neg_pll[i].item() for i in range(len(sampled_seq_i))
+                    ]
+                    csv_dir = os.path.join(self.save_dir, 'scores')
+                    os.makedirs(csv_dir, exist_ok=True)
+                    output_indiv_csv(scores, csv_dir)
+            output_fasta(
+                preds, fasta_dir
+            )  # all generated sequences automatically saved to one fasta file
